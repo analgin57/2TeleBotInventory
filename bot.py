@@ -10,6 +10,7 @@ import mysql.connector
 import logging
 import re
 import csv
+import multiprocessing
 
 def get_current_time():
     return datetime.datetime.now().strftime("[%d.%m.%Y %H:%M:%S]")
@@ -65,11 +66,6 @@ usr_bot_token = {usr_bot_token}
         print(f'{get_current_time()} Новый конфигурационный файл не создан.')
         print(f'{get_current_time()} Программа завершена.')
         exit()
-
-logger = telebot.logger
-telebot.logger.setLevel(logging.INFO)
-
-
 
 if configured == '1':
     print(f"{get_current_time()} Настройки уже сконфигурированы. Пропуск проверок.")
@@ -187,6 +183,12 @@ password = get_config_value('mysql', 'password')
 database = get_config_value('mysql', 'database')
 admin_chat_id = get_config_value('telegram', 'admin_chat_id')
 
+adm_bot = telebot.TeleBot(config['telegram']['adm_bot_token'])
+usr_bot = telebot.TeleBot(config['telegram']['usr_bot_token'])
+
+logger = telebot.logger
+telebot.logger.setLevel(logging.INFO)
+
 # Функции для создания клавиатур
 def create_offices_keyboard():
     offices_keyboard = types.ReplyKeyboardMarkup(row_width=1, one_time_keyboard=True, resize_keyboard=True)
@@ -214,14 +216,35 @@ def create_functions_keyboard():
 
     return functions_keyboard
 
+def create_db_connection():
+    conn = mysql.connector.connect(
+        host=config['mysql']['host'],
+        user=config['mysql']['user'],
+        password=config['mysql']['password'],
+        database=config['mysql']['database']
+    )
+    return conn
+
 # Обработчики для adm_bot
 adm_bot = telebot.TeleBot(config['telegram']['adm_bot_token'])
 
 @adm_bot.message_handler(commands=['start'])
+# Проверка на администратора
+def check_admin_rights(message):
+    if str(message.chat.id) == admin_chat_id:
+        return True
+    else:
+        bot.send_message(message.chat.id, "⛔У Вас нет прав администратора⛔", reply_markup=telebot.types.ReplyKeyboardRemove())
+        return False
+
+db_connection_adm = create_db_connection()
+db_cursor_adm = db_connection_adm.cursor(buffered=True)
+
 def start_adm_bot(message):
     if check_admin_rights(message):
         bot.send_message(message.chat.id, "Права администратора подтверждены.")
         bot.send_message(message.chat.id, "Команды: /offices /functions /users", reply_markup=telebot.types.ReplyKeyboardRemove())
+        print(f"{get_current_time()} Обработчик start_adm_bot вызван.")
         # Проверка наличия и заполненности таблиц offices, functions и users
         table_names = ["offices", "functions", "users"]
         for table_name in table_names:
@@ -233,9 +256,12 @@ def start_adm_bot(message):
                     bot.send_message(message.chat.id, f"Заполнить таблицу - /{table_name}")
             except mysql.connector.Error as e:
                 bot.send_message(message.chat.id, f"Ошибка при проверке таблицы {table_name}: {e}")
+        print(f"start_adm_bot called with message: {message}")
 
 # Обработчики для usr_bot
 usr_bot = telebot.TeleBot(config['telegram']['usr_bot_token'])
+db_connection_usr = create_db_connection()
+db_cursor_usr = db_connection_usr.cursor(buffered=True)
 
 @usr_bot.message_handler(commands=['start'])
 def start_usr_bot(message):
@@ -249,6 +275,7 @@ def start_usr_bot(message):
         usr_bot.send_message(chat_id, "Для начала работы, пожалуйста, зарегистрируйтесь.")
         usr_bot.send_message(chat_id, "Введите свою Фамилию Имя Отчество:")
         usr_bot.register_next_step_handler(message, process_user_name)
+    print(f"start_usr_bot called with message: {message}")
 
 def process_user_name(message):
     user_name = message.text
@@ -285,8 +312,28 @@ def save_new_user_task(message, user_name, user_office, user_function):
     db_connection.commit()
     usr_bot.send_message(chat_id, "✅Заявка на регистрацию отправлена!")
 
+print("adm_bot:", adm_bot)
+print("usr_bot:", usr_bot)
+# bot_info = adm_bot.get_me()
+# print(bot_info)
+
+# bot_info = usr_bot.get_me()
+# print(bot_info)
+
+if __name__ == "__main__":
+    p1 = multiprocessing.Process(target=adm_bot.polling)
+    p2 = multiprocessing.Process(target=usr_bot.polling)
+
+    p1.start()
+    p2.start()
+
+    p1.join()
+    p2.join()
+
 adm_bot.polling()
 usr_bot.polling()
 
-cursor.close()
-conn.close()
+db_cursor_adm.close()
+db_connection_adm.close()
+db_cursor_usr.close()
+db_connection_usr.close()
