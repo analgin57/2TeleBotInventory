@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+# user_bot регистрирует и обрабатывает запросы зарегистрированных пользователей
 import os
 import datetime
 import telebot
