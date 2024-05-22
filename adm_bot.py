@@ -193,6 +193,7 @@ db_cursor = db_connection.cursor()
 
 # Создание объекта бота
 bot = telebot.TeleBot(config['telegram']['bot_token'])
+
 # Проверка на администратора
 def check_admin_rights(message):
     if str(message.chat.id) == admin_chat_id:
