@@ -16,7 +16,7 @@ import threading
 
 # Константы
 CHECK_TIME = 60  # Время проверки БД на новые задания в секундах
-ALERTS_PERIODS = "60 60 300 1800"  # Периоды в секундах, через которые бот будет присылать сообщения о новых заявках. Последний период зацикливается, пока активные заявки не кончатся.
+ALERTS_PERIODS = "60 60 120 300 1800"  # Периоды в секундах, через которые бот будет присылать сообщения о новых заявках. Последний период зацикливается, пока активные заявки не кончатся. !!! Ниже по коду она дублируется перед def check_tasks !!! Не забудь удалить дубль внизу!
 # Сразу объявим current_time
 def get_current_time():
     return datetime.datetime.now().strftime("[%d.%m.%Y %H:%M:%S]")
@@ -916,43 +916,35 @@ def reset_global_variables():
     return
 
 # Функция для периодической проверки заданий
+ALERTS_PERIODS = "60 60 120 300 1800"
+periods = [int(period) for period in ALERTS_PERIODS.split()]
 
 def check_tasks():
-    periods = ALERTS_PERIODS.split()
-    current_period = 0
-    first_run = True
+    active_tasks = False
     while True:
-        db_cursor.execute("SELECT * FROM tasks WHERE receiver = 'adm_bot' AND status IN ('new', 'in_progress')")
+        db_cursor.execute("SELECT * FROM tasks WHERE receiver = 'adm_bot' AND status = 'new'")
         tasks = db_cursor.fetchall()
-        print(f'{get_current_time()} periods:{periods}, current_period: {current_period}, first_run: {first_run}\ntasks: {tasks}')
+        active_tasks = bool(tasks)
         
-        if not tasks and first_run:
-            bot.send_message(admin_chat_id, "🤷 Активных заявок на регистрацию нет")
-            time.sleep(CHECK_TIME)  # Пауза перед следующей проверкой
+        new_task_alert(tasks, active_tasks, periods)
+        time.sleep(CHECK_TIME)
 
-        if tasks:
-            task = tasks[0]
-            process_task(task)
-            tasks = tasks[1:]
-
-        if not tasks:
-            if current_period < len(periods) - 1:
-                current_period += 1
-            else:
-                current_period = 0
-                first_run = True
-            
-            if current_period == 0:
-                bot.send_message(admin_chat_id, "🤷 Активных заявок на регистрацию нет")
-
-            time.sleep(int(periods[current_period]))  # Пауза перед следующей проверкой
+def new_task_alert(tasks, active_tasks, periods):
+    current_period = 0
+    last_period = len(periods) - 1
+    while active_tasks:
+        process_task(tasks[0])
+        time.sleep(int(periods[current_period]))
+        
+        current_period = (current_period + 1) % len(periods)
+        if current_period == last_period:
+            while active_tasks:
+                process_task(tasks[0])
+                time.sleep(int(periods[last_period]))
 
 def process_task(task):
-    # Отправка сообщения администратору
     bot.send_message(admin_chat_id, f"Новая заявка:\nID: {task[0]}\nИмя: {task[3]}\nФункция: {task[4]}\nОфис: {task[5]}\nСтатус: {task[2]}")
-
-    # Предложение действий
-    bot.send_message(admin_chat_id, "Выберите действие:\n/approve - Одобрить\n/reject - Отклонить\n/send_back - Отправить на доработку")
+    bot.send_message(admin_chat_id, f"Выберите действие:\n/approve - Одобрить\n/reject - Отклонить\n/send_back - Отправить на доработку")
 
 # Функция для обработки выбора действия
 @bot.message_handler(func=lambda message: message.text.startswith('/'))
