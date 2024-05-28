@@ -3,6 +3,7 @@
 # adm_bot управляет конфигурацией предприятий, пользователей, номенклатурой запчастей
 import os
 import datetime
+import time
 import telebot
 from telebot import types
 import configparser
@@ -11,11 +12,16 @@ import mysql.connector
 import logging
 import re
 import csv
+import threading
 
+# Константы
+CHECK_TIME = 60  # Время проверки БД на новые задания в секундах
+ALERTS_PERIODS = "60 60 300 1800"  # Периоды в секундах, через которые бот будет присылать сообщения о новых заявках. Последний период зацикливается, пока активные заявки не кончатся.
 # Сразу объявим current_time
 def get_current_time():
     return datetime.datetime.now().strftime("[%d.%m.%Y %H:%M:%S]")
 current_time = get_current_time()
+
 # Инициализация конфига
 config_file = 'config.ini'
 
@@ -908,6 +914,78 @@ def reset_global_variables():
     last_user_id = 0    
     free_user_id = 0    
     return
+
+# Функция для периодической проверки заданий
+
+def check_tasks():
+    periods = ALERTS_PERIODS.split()
+    current_period = 0
+    first_run = True
+    while True:
+        db_cursor.execute("SELECT * FROM tasks WHERE receiver = 'adm_bot' AND status IN ('new', 'in_progress')")
+        tasks = db_cursor.fetchall()
+        print(f'{get_current_time()} periods:{periods}, current_period: {current_period}, first_run: {first_run}\ntasks: {tasks}')
+        
+        if not tasks and first_run:
+            bot.send_message(admin_chat_id, "🤷 Активных заявок на регистрацию нет")
+            time.sleep(CHECK_TIME)  # Пауза перед следующей проверкой
+
+        if tasks:
+            task = tasks[0]
+            process_task(task)
+            tasks = tasks[1:]
+
+        if not tasks:
+            if current_period < len(periods) - 1:
+                current_period += 1
+            else:
+                current_period = 0
+                first_run = True
+            
+            if current_period == 0:
+                bot.send_message(admin_chat_id, "🤷 Активных заявок на регистрацию нет")
+
+            time.sleep(int(periods[current_period]))  # Пауза перед следующей проверкой
+
+def process_task(task):
+    # Отправка сообщения администратору
+    bot.send_message(admin_chat_id, f"Новая заявка:\nID: {task[0]}\nИмя: {task[3]}\nФункция: {task[4]}\nОфис: {task[5]}\nСтатус: {task[2]}")
+
+    # Предложение действий
+    bot.send_message(admin_chat_id, "Выберите действие:\n/approve - Одобрить\n/reject - Отклонить\n/send_back - Отправить на доработку")
+
+# Функция для обработки выбора действия
+@bot.message_handler(func=lambda message: message.text.startswith('/'))
+def handle_task_action(message):
+    action = message.text.lower()
+    if action == "/approve":
+        # Одобрение задания
+        approve_task(message)
+    elif action == "/reject":
+        # Отклонение задания
+        reject_task(message)
+    elif action == "/send_back":
+        # Отправка на доработку
+        send_back_task(message)
+
+# Запуск потока для проверки заданий
+task_checker_thread = threading.Thread(target=check_tasks)
+task_checker_thread.start()
+
+# Обработка ошибок в потоке
+task_checker_thread.join()  # Ждём завершения потока
+if task_checker_thread.is_alive():
+    print("Поток завершился с ошибкой. Программа будет перезапущена.")
+    # Здесь можно добавить код для перезапуска программы
+
+def approve_task(task):
+    bot.send_message(admin_chat_id, f"Заявка ID: {task[0]} одобрена.")
+
+def reject_task(task):
+    bot.send_message(admin_chat_id, f"Заявка ID: {task[0]} отклонена.")
+
+def send_back_task(task):
+    bot.send_message(admin_chat_id, f"Заявка ID: {task[0]} отправлена на доработку.")
 
 bot.enable_save_next_step_handlers(delay=5)
 bot.polling()

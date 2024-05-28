@@ -76,6 +76,13 @@ cursor = conn.cursor()
 
 table_name_tasks = "tasks"
 
+def function_call_logger(func):
+    def wrapper(*args, **kwargs):
+        print(f"Вызов функции {func.__name__} с аргументами: {args}, {kwargs}")
+        result = func(*args, **kwargs)
+        return result
+    return wrapper
+
 try:
     cursor.execute(f"SELECT * FROM {table_name_tasks}")
     results = cursor.fetchall()  # Обработка результатов запроса
@@ -116,17 +123,24 @@ bot_token = config['telegram']['bot_token']
 bot = telebot.TeleBot(bot_token)
 
 @bot.message_handler(commands=['start'])
+@function_call_logger
 def start_command(message):
     chat_id = message.chat.id
     cursor.execute("SELECT * FROM users WHERE user_chat_id = %s", (chat_id,))
     user = cursor.fetchone()
 
     if user:
-        bot.send_message(chat_id, "Добро пожаловать! Вы уже зарегистрированы.")
+        bot.send_message(chat_id, "Добро пожаловать! Вы уже зарегистрированы.", reply_markup=telebot.types.ReplyKeyboardRemove())
     else:
-        bot.send_message(chat_id, "Для начала работы, пожалуйста, зарегистрируйтесь.")
-        bot.send_message(chat_id, "Введите свою Фамилию Имя Отчество:")
-        bot.register_next_step_handler(message, process_user_name)
+        # Проверка наличия заявки в таблице tasks
+        cursor.execute("SELECT * FROM tasks WHERE receiver = 'adm_bot' AND status = 'new' AND chat_id = %s", (chat_id,))
+        task = cursor.fetchone()
+        if task:
+            bot.send_message(chat_id, "🐌 Ваша заявка ждёт одобрения администратором. Ожидайте ответа! ⏳", reply_markup=telebot.types.ReplyKeyboardRemove())
+        else:
+            bot.send_message(chat_id, "Для начала работы, пожалуйста, зарегистрируйтесь.", reply_markup=telebot.types.ReplyKeyboardRemove())
+            bot.send_message(chat_id, "Введите свою Фамилию Имя Отчество:")
+            bot.register_next_step_handler(message, process_user_name)
 
 def process_cancel(message):
     global user_name, user_office, user_function
@@ -141,7 +155,7 @@ def create_actions_keyboard():
     save_button = telebot.types.KeyboardButton("📝Отправить")
     cancel_button = telebot.types.KeyboardButton("❌Отмена❌")
     actions_keyboard.add(save_button, cancel_button)
-    return
+    return actions_keyboard
 
 def create_functions_keyboard():
     functions_keyboard = telebot.types.ReplyKeyboardMarkup(row_width=1, one_time_keyboard=True, resize_keyboard=True)
@@ -173,7 +187,7 @@ def process_user_name(message):
     user_name = message.text
     pattern = r'^[А-Я][а-я]{1,20} [А-Я][а-я]{1,20} (?:[А-Я][а-я]{1,20}вна|[А-Я][а-я]{1,20}вич)$'
     if not re.match(pattern, user_name):
-        bot.send_message(message.chat.id, "❌Неверный формат Фамилии Имени Отчества!")
+        bot.send_message(message.chat.id, "❌Неверный формат Фамилии Имени Отчества!", reply_markup=telebot.types.ReplyKeyboardRemove())
         bot.register_next_step_handler(message, process_user_name)
         return
     bot.send_message(message.chat.id, "Выберите предприятие из списка:", reply_markup=create_offices_keyboard())
@@ -230,7 +244,8 @@ def process_user_function(message, user_name, user_office):
                 # Удаление предыдущей клавиатуры
                 bot.send_message(message.chat.id, f"Проверьте данные:\n{user_info}\n\n", reply_markup=telebot.types.ReplyKeyboardRemove())
                 # Добавление новой клавиатуры с действиями
-                bot.send_message(message.chat.id, "Выберите действие:", reply_markup=create_actions_keyboard())
+                actions_keyboard = create_actions_keyboard()
+                bot.send_message(message.chat.id, "Выберите действие:", reply_markup=actions_keyboard)
                 bot.register_next_step_handler(message, process_user_confirmation, user_name, user_office, user_function)
         else:
             bot.send_message(message.chat.id, "Ошибка при получении списка должностей. Попробуйте позже.")
@@ -249,8 +264,8 @@ def process_user_confirmation(message, user_name, user_office, user_function):
 def save_new_user_task(message, user_name, user_office, user_function):
     chat_id = message.chat.id
     cursor.execute("INSERT INTO tasks (receiver, status, name, function, office, chat_id) VALUES (%s, %s, %s, %s, %s, %s)", ('adm_bot', 'new', user_name, user_function, user_office, chat_id))
-    db_connection.commit()
-    bot.send_message(chat_id, "✅Заявка на регистрацию отправлена!")
+    conn.commit()  # Используем conn вместо db_connection
+    bot.send_message(chat_id, "✅Заявка на регистрацию отправлена!", reply_markup=telebot.types.ReplyKeyboardRemove())
 
 bot.polling()
 # Закрытие курсора и соединения с базой данных
