@@ -916,6 +916,7 @@ def reset_global_variables():
     return
 
 # Функция для периодической проверки заданий
+ALERTS_PERIODS = "60 60 120 300 1800"
 periods = [int(period) for period in ALERTS_PERIODS.split()]
 
 def check_tasks():
@@ -925,11 +926,14 @@ def check_tasks():
             db_cursor.execute("SELECT * FROM tasks WHERE receiver = 'adm_bot' AND status = 'new'")
             tasks = db_cursor.fetchall()
             active_tasks = bool(tasks)
+            
             new_task_alert(tasks, active_tasks, periods)
             time.sleep(CHECK_TIME)
         except Exception as e:
-            print(f"Ошибка в потоке check_tasks: {e}")
-            time.sleep(10)  # Пауза перед перезапуском
+            print(f"{get_current_time()} Ошибка в потоке check_tasks: {e}")
+            # Перезапуск потока
+            task_checker_thread.start()
+            break
 
 def new_task_alert(tasks, active_tasks, periods):
     current_period = 0
@@ -964,6 +968,7 @@ def handle_task_action(message):
 
 # Запуск потока для проверки заданий
 task_checker_thread = threading.Thread(target=check_tasks)
+task_checker_thread.daemon = True  # Демонизация потока
 task_checker_thread.start()
 
 # Обработка ошибок в потоке
