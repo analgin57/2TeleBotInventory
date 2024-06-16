@@ -13,6 +13,7 @@ import logging
 import re
 import csv
 import threading
+import asyncio
 
 # Константы
 CHECK_TIME = 60  # Время проверки БД на новые задания в секундах
@@ -916,10 +917,11 @@ def reset_global_variables():
     return
 
 # Функция для периодической проверки заданий
-ALERTS_PERIODS = "60 60 120 300 1800"
 periods = [int(period) for period in ALERTS_PERIODS.split()]
 
-def check_tasks():
+loop = asyncio.get_event_loop()
+
+async def check_tasks():
     active_tasks = False
     while True:
         try:
@@ -927,67 +929,68 @@ def check_tasks():
             tasks = db_cursor.fetchall()
             active_tasks = bool(tasks)
             
-            new_task_alert(tasks, active_tasks, periods)
-            time.sleep(CHECK_TIME)
+            await new_task_alert(tasks, active_tasks, periods)
+            await asyncio.sleep(CHECK_TIME)
         except Exception as e:
             print(f"{get_current_time()} Ошибка в потоке check_tasks: {e}")
             # Перезапуск потока
-            task_checker_thread.start()
+            asyncio.create_task(check_tasks())
             break
 
-def new_task_alert(tasks, active_tasks, periods):
+async def new_task_alert(tasks, active_tasks, periods):
     current_period = 0
     last_period = len(periods) - 1
     while active_tasks:
-        process_task(tasks[0])
-        time.sleep(int(periods[current_period]))
+        await process_task(tasks[0])
+        await asyncio.sleep(int(periods[current_period]))
         
         current_period = (current_period + 1) % len(periods)
         if current_period == last_period:
             while active_tasks:
-                process_task(tasks[0])
-                time.sleep(int(periods[last_period]))
+                await process_task(tasks[0])
+                await asyncio.sleep(int(periods[last_period]))
 
-def process_task(task):
-    bot.send_message(admin_chat_id, f"Новая заявка:\nID: {task[0]}\nИмя: {task[3]}\nФункция: {task[4]}\nОфис: {task[5]}\nСтатус: {task[2]}")
-    bot.send_message(admin_chat_id, f"Выберите действие:\n/approve - Одобрить\n/reject - Отклонить\n/send_back - Отправить на доработку")
+async def process_task(task):
+    await bot.send_message(admin_chat_id, f"Новая заявка:\nID: {task[0]}\nИмя: {task[3]}\nФункция: {task[4]}\nОфис: {task[5]}\nСтатус: {task[2]}")
+    await bot.send_message(admin_chat_id, f"Выберите действие:\n/approve - Одобрить\n/reject - Отклонить\n/send_back - Отправить на доработку")
+
+try:
+    loop.run_until_complete(check_tasks())
+except KeyboardInterrupt:
+    loop.close()
 
 # Функция для обработки выбора действия
+async def approve_task(task_id):
+    await bot.send_message(admin_chat_id, f"Заявка ID: {task_id} одобрена.")
+
+async def reject_task(task_id):
+    await bot.send_message(admin_chat_id, f"Заявка ID: {task_id} отклонена.")
+
+async def send_back_task(task_id):
+    await bot.send_message(admin_chat_id, f"Заявка ID: {task_id} отправлена на доработку.")
+
 @bot.message_handler(func=lambda message: message.text.startswith('/'))
-def handle_task_action(message):
+async def handle_task_action(message):
     action = message.text.lower()
+    task_id = extract_task_id_from_message(message)  # Функция для извлечения ID из сообщения
     if action == "/approve":
         # Одобрение задания
-        approve_task(message)
+        await approve_task(task_id)
     elif action == "/reject":
         # Отклонение задания
-        reject_task(message)
+        await reject_task(task_id)
     elif action == "/send_back":
         # Отправка на доработку
-        send_back_task(message)
+        await send_back_task(task_id)
 
-# Запуск потока для проверки заданий
-task_checker_thread = threading.Thread(target=check_tasks)
-task_checker_thread.daemon = True  # Демонизация потока
-task_checker_thread.start()
+async def main():
+    asyncio.create_task(check_tasks())
+    bot.polling()
 
-# Обработка ошибок в потоке
-task_checker_thread.join()  # Ждём завершения потока
-if task_checker_thread.is_alive():
-    print("Поток завершился с ошибкой. Программа будет перезапущена.")
-    # Здесь можно добавить код для перезапуска программы
-
-def approve_task(task):
-    bot.send_message(admin_chat_id, f"Заявка ID: {task[0]} одобрена.")
-
-def reject_task(task):
-    bot.send_message(admin_chat_id, f"Заявка ID: {task[0]} отклонена.")
-
-def send_back_task(task):
-    bot.send_message(admin_chat_id, f"Заявка ID: {task[0]} отправлена на доработку.")
-
-bot.enable_save_next_step_handlers(delay=5)
-bot.polling()
+if __name__ == "__main__":
+    bot.enable_save_next_step_handlers(delay=5)
+    loop.create_task(check_tasks())
+    bot.polling()
 
 db_cursor.close()
 db_connection.close()
