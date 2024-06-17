@@ -922,14 +922,12 @@ periods = [int(period) for period in ALERTS_PERIODS.split()]
 loop = asyncio.get_event_loop()
 
 async def check_tasks():
-    active_tasks = False
     while True:
         try:
             db_cursor.execute("SELECT * FROM tasks WHERE receiver = 'adm_bot' AND status = 'new'")
             tasks = db_cursor.fetchall()
-            active_tasks = bool(tasks)
-            
-            await new_task_alert(tasks, active_tasks, periods)
+            if tasks:
+                await process_new_task(tasks[0])
             await asyncio.sleep(CHECK_TIME)
         except Exception as e:
             print(f"{get_current_time()} Ошибка в потоке check_tasks: {e}")
@@ -937,60 +935,45 @@ async def check_tasks():
             asyncio.create_task(check_tasks())
             break
 
-async def new_task_alert(tasks, active_tasks, periods):
-    current_period = 0
-    last_period = len(periods) - 1
-    while active_tasks:
-        await process_task(tasks[0])
-        await asyncio.sleep(int(periods[current_period]))
-        
-        current_period = (current_period + 1) % len(periods)
-        if current_period == last_period:
-            while active_tasks:
-                await process_task(tasks[0])
-                await asyncio.sleep(int(periods[last_period]))
+async def process_new_task(task):
+    task_id, _, status, name, function, office = task
+    keyboard = telebot.types.InlineKeyboardMarkup()
+    approve_button = telebot.types.InlineKeyboardButton("Одобрить", callback_data=f"approve_{task_id}")
+    reject_button = telebot.types.InlineKeyboardButton("Отклонить", callback_data=f"reject_{task_id}")
+    send_back_button = telebot.types.InlineKeyboardButton("Вернуть на доработку", callback_data=f"send_back_{task_id}")
+    keyboard.add(approve_button, reject_button, send_back_button)
+    
+    await bot.send_message(admin_chat_id, f"Новая заявка:\nID: {task_id}\nИмя: {name}\nФункция: {function}\nОфис: {office}\nСтатус: {status}", reply_markup=keyboard)
 
-async def process_task(task):
-    await bot.send_message(admin_chat_id, f"Новая заявка:\nID: {task[0]}\nИмя: {task[3]}\nФункция: {task[4]}\nОфис: {task[5]}\nСтатус: {task[2]}")
-    await bot.send_message(admin_chat_id, f"Выберите действие:\n/approve - Одобрить\n/reject - Отклонить\n/send_back - Отправить на доработку")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("approve_") or call.data.startswith("reject_") or call.data.startswith("send_back_"))
+async def handle_task_action(call):
+    action, task_id = call.data.split("_", 1)
+    task_id = int(task_id)
+    
+    if action == "approve":
+        await approve_task(task_id)
+    elif action == "reject":
+        await reject_task(task_id)
+    elif action == "send_back":
+        await send_back_task(task_id)
+    
+    await bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
 
-try:
-    loop.run_until_complete(check_tasks())
-except KeyboardInterrupt:
-    loop.close()
-
-# Функция для обработки выбора действия
 async def approve_task(task_id):
-    await bot.send_message(admin_chat_id, f"Заявка ID: {task_id} одобрена.")
+    bot.send_message(admin_chat_id, f"Заявка ID: {task_id} одобрена.")
 
 async def reject_task(task_id):
-    await bot.send_message(admin_chat_id, f"Заявка ID: {task_id} отклонена.")
+    bot.send_message(admin_chat_id, f"Заявка ID: {task_id} отклонена.")
 
 async def send_back_task(task_id):
-    await bot.send_message(admin_chat_id, f"Заявка ID: {task_id} отправлена на доработку.")
-
-@bot.message_handler(func=lambda message: message.text.startswith('/'))
-async def handle_task_action(message):
-    action = message.text.lower()
-    task_id = extract_task_id_from_message(message)  # Функция для извлечения ID из сообщения
-    if action == "/approve":
-        # Одобрение задания
-        await approve_task(task_id)
-    elif action == "/reject":
-        # Отклонение задания
-        await reject_task(task_id)
-    elif action == "/send_back":
-        # Отправка на доработку
-        await send_back_task(task_id)
+    bot.send_message(admin_chat_id, f"Заявка ID: {task_id} отправлена на доработку.")
 
 async def main():
     asyncio.create_task(check_tasks())
     bot.polling()
 
 if __name__ == "__main__":
-    bot.enable_save_next_step_handlers(delay=5)
-    loop.create_task(check_tasks())
-    bot.polling()
+    asyncio.run(main())
 
 db_cursor.close()
 db_connection.close()
